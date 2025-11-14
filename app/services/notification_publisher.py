@@ -1,6 +1,7 @@
 import pika
 import json
 import logging
+import time
 from datetime import datetime
 from app.config.settings import settings
 from app.models.events import NotificationEvent, NotificationType
@@ -19,34 +20,62 @@ class NotificationPublisher:
         self.setup_connection()
 
     def setup_connection(self):
-        """Establece conexión con RabbitMQ para publicar mensajes"""
-        try:
-            credentials = pika.PlainCredentials(
-                settings.rabbitmq_user,
-                settings.rabbitmq_password
-            )
-            parameters = pika.ConnectionParameters(
-                host=settings.rabbitmq_host,
-                port=settings.rabbitmq_port,
-                credentials=credentials,
-                heartbeat=600,
-                blocked_connection_timeout=300
-            )
+        """Establece conexión con RabbitMQ para publicar mensajes con reintentos"""
+        MAX_RETRIES = 20
+        WAIT_SECONDS = 3
 
-            self.connection = pika.BlockingConnection(parameters)
-            self.channel = self.connection.channel()
+        credentials = pika.PlainCredentials(
+            settings.rabbitmq_user,
+            settings.rabbitmq_password
+        )
+        parameters = pika.ConnectionParameters(
+            host=settings.rabbitmq_host,
+            port=settings.rabbitmq_port,
+            credentials=credentials,
+            heartbeat=600,
+            blocked_connection_timeout=300
+        )
 
-            # Declarar cola de destino (notifications.delivery)
-            self.channel.queue_declare(
-                queue=settings.notifications_queue,
-                durable=True
-            )
+        attempt = 1
+        while attempt <= MAX_RETRIES:
+            try:
+                logger.info(f"🔄 Intentando conectar publicador a RabbitMQ (intento {attempt}/{MAX_RETRIES})...")
+                self.connection = pika.BlockingConnection(parameters)
+                self.channel = self.connection.channel()
 
-            logger.info("✅ Publicador de notificaciones configurado exitosamente")
+                # Declarar exchange
+                self.channel.exchange_declare(
+                    exchange=settings.exchange_name,
+                    exchange_type='topic',
+                    durable=True
+                )
 
-        except Exception as e:
-            logger.error(f"❌ Error configurando publicador: {e}")
-            raise
+                # Declarar cola de destino (notifications.delivery)
+                self.channel.queue_declare(
+                    queue=settings.notifications_queue,
+                    durable=True
+                )
+
+                # Vincular cola al exchange
+                self.channel.queue_bind(
+                    exchange=settings.exchange_name,
+                    queue=settings.notifications_queue,
+                    routing_key=settings.notifications_routing_key
+                )
+
+                logger.info("✅ Publicador de notificaciones configurado exitosamente")
+                return
+
+            except Exception as e:
+                logger.error(f"❌ Error configurando publicador (intento {attempt}/{MAX_RETRIES}): {e}")
+                if attempt == MAX_RETRIES:
+                    logger.critical("🔥 No se pudo conectar el publicador después de múltiples intentos. Abortando.")
+                    raise
+
+                wait = WAIT_SECONDS
+                logger.info(f"⏳ Reintentando en {wait} segundos...")
+                time.sleep(wait)
+                attempt += 1
 
     def publish_notification(self, notification: NotificationEvent):
         """

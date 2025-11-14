@@ -1,6 +1,8 @@
 import pika
 import json
 import logging
+import time
+
 from typing import Callable
 from app.config.settings import settings
 from app.models.events import (
@@ -24,38 +26,52 @@ class RabbitMQConsumer:
         self.setup_connection()
 
     def setup_connection(self):
-        """Establece conexión con RabbitMQ"""
-        try:
-            credentials = pika.PlainCredentials(
-                settings.rabbitmq_user,
-                settings.rabbitmq_password
-            )
-            parameters = pika.ConnectionParameters(
-                host=settings.rabbitmq_host,
-                port=settings.rabbitmq_port,
-                credentials=credentials,
-                heartbeat=600,
-                blocked_connection_timeout=300
-            )
 
-            self.connection = pika.BlockingConnection(parameters)
-            self.channel = self.connection.channel()
+        MAX_RETRIES = 20
+        WAIT_SECONDS = 3
 
-            # Declarar exchange con tipo topic para routing flexible
-            self.channel.exchange_declare(
-                exchange=settings.exchange_name,
-                exchange_type='topic',
-                durable=True
-            )
+        credentials = pika.PlainCredentials(
+            settings.rabbitmq_user,
+            settings.rabbitmq_password
+        )
 
-            # Declarar todas las colas necesarias
-            self._declare_queues()
+        parameters = pika.ConnectionParameters(
+            host=settings.rabbitmq_host,
+            port=settings.rabbitmq_port,
+            credentials=credentials,
+            heartbeat=600,
+            blocked_connection_timeout=300
+        )
 
-            logger.info("✅ Conexión a RabbitMQ establecida exitosamente")
+        attempt = 1
+        while attempt <= MAX_RETRIES:
+            try:
+                logger.info(f"🔄 Intentando conectar a RabbitMQ (intento {attempt}/{MAX_RETRIES})...")
+                self.connection = pika.BlockingConnection(parameters)
+                self.channel = self.connection.channel()
 
-        except Exception as e:
-            logger.error(f"❌ Error estableciendo conexión a RabbitMQ: {e}")
-            raise
+                # Declarar exchange y colas
+                self.channel.exchange_declare(
+                    exchange=settings.exchange_name,
+                    exchange_type='topic',
+                    durable=True
+                )
+                self._declare_queues()
+
+                logger.info("✅ Conexión a RabbitMQ establecida exitosamente")
+                return
+
+            except Exception as e:
+                logger.error(f"❌ Error conectando a RabbitMQ: {e}")
+                if attempt == MAX_RETRIES:
+                    logger.critical("🔥 No se pudo conectar después de múltiples intentos. Abortando.")
+                    raise
+
+                wait = WAIT_SECONDS
+                logger.info(f"⏳ Reintentando en {wait} segundos...")
+                time.sleep(wait)
+                attempt += 1
+
 
     def _declare_queues(self):
         """

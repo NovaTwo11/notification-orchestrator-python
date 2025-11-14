@@ -5,6 +5,11 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import threading
 
+# --- AÑADIDO ---
+# Importar la biblioteca de Prometheus
+from prometheus_fastapi_instrumentator import Instrumentator
+# ---------------
+
 from app.config.settings import settings
 from app.services.rabbitmq_consumer import RabbitMQConsumer
 from app.services.notification_publisher import NotificationPublisher
@@ -189,6 +194,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# --- Configurar Prometheus ---
+logger.info("🔧 Configurando métricas de Prometheus...")
+Instrumentator().instrument(app).expose(app)
+logger.info("✅ Endpoint /metrics de Prometheus expuesto")
+# -------------------------------------
+
 @app.get("/")
 async def root():
     """Endpoint raíz - información del servicio"""
@@ -211,16 +222,22 @@ async def health():
         "version": settings.app_version
     }
 
-@app.get("/metrics")
-async def metrics():
-    """
-    Endpoint de métricas básicas.
-    Puede extenderse con Prometheus metrics en el futuro.
-    """
-    return {
-        "service": settings.app_name,
-        "consumer_running": consumer_thread.is_alive() if consumer_thread else False
-    }
+
+# --- ELIMINADO ---
+# Este endpoint @app.get("/metrics") se elimina
+# porque devolvía JSON (lo que causaba el error en Prometheus)
+# y ahora Instrumentator() lo crea automáticamente en el formato de texto correcto.
+# -----------------
+# @app.get("/metrics")
+# async def metrics():
+#     """
+#     Endpoint de métricas básicas.
+#     """
+#     return {
+#         "service": settings.app_name,
+#         "consumer_running": consumer_thread.is_alive() if consumer_thread else False
+#     }
+
 
 # ========== PUNTO DE ENTRADA ==========
 if __name__ == "__main__":
@@ -228,6 +245,7 @@ if __name__ == "__main__":
 
     logger.info("🎬 Iniciando servidor Uvicorn...")
 
+    # Usamos tu configuración original de uvicorn que es más completa
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
